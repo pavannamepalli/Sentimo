@@ -74,4 +74,12 @@ dependencies {
 
     // Firebase (if required)
     implementation (libs.google.firebase.analytics)
+
+    // ViewModel
+    implementation (libs.androidx.lifecycle.viewmodel.ktx)
+// LiveData
+    implementation (libs.androidx.lifecycle.livedata.ktx)
+// Lifecycle runtime
+    implementation (libs.androidx.lifecycle.runtime.ktx)
+
 }
