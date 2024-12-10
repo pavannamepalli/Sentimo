@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "683335380640",
+    "project_id": "sentimo-8a773",
+    "storage_bucket": "sentimo-8a773.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:683335380640:android:5467547c9178ed10cb63c5",
+        "android_client_info": {
+          "package_name": "com.example.sentimo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCG2Frb7TPfty-jHRW7Z0Qx79CIor8qeS0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
