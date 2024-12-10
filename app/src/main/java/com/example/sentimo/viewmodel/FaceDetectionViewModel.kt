@@ -1,5 +1,6 @@
 package com.example.sentimo.viewmodel
 
+import androidx.camera.core.ImageProxy
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
@@ -16,14 +17,23 @@ class FaceDetectionViewModel : ViewModel() {
     private val _error = MutableLiveData<String>()
     val error: LiveData<String> = _error
 
-    fun processImage(image: InputImage) {
-        model.detectFaces(image,
+
+
+    fun processImage(image: InputImage, imageProxy: ImageProxy) {
+        model.detectFaces(
+            image,
+            imageProxy,
             callback = { detectedFaces ->
-                _faces.postValue(detectedFaces)
+                _faces.postValue(detectedFaces) // Notify observers of detected faces
             },
             errorCallback = { exception ->
                 _error.postValue("Face detection failed: ${exception.message}")
             }
         )
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        model.close() // Clean up model resources
     }
 }

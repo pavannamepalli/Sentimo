@@ -7,6 +7,8 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -14,19 +16,32 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import com.example.sentimo.R
 import com.example.sentimo.viewmodel.FaceDetectionViewModel
+import com.google.firebase.FirebaseApp
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.*
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
+    private lateinit var cameraExecutor: ExecutorService
     private lateinit var viewModel: FaceDetectionViewModel
+    private var lastProcessedTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        FirebaseApp.initializeApp(this)
 
         previewView = findViewById(R.id.previewView)
+        cameraExecutor = Executors.newSingleThreadExecutor()
         viewModel = ViewModelProvider(this)[FaceDetectionViewModel::class.java]
+
+        if (allPermissionsGranted()) {
+            startCamera()
+        } else {
+            requestPermissions.launch(arrayOf(permission.CAMERA))
+        }
 
         // Observe ViewModel
         viewModel.faces.observe(this) { faces ->
@@ -42,11 +57,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Camera Permissions
-        if (allPermissionsGranted()) {
-            startCamera()
-        } else {
-            requestPermissions.launch(arrayOf(permission.CAMERA))
-        }
+
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraExecutor.shutdown()
     }
 
     private val requestPermissions = registerForActivityResult(
@@ -70,16 +86,16 @@ class MainActivity : AppCompatActivity() {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            val imageAnalyzer = androidx.camera.core.ImageAnalysis.Builder()
-                .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            val imageAnalyzer = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
-                    it.setAnalyzer(ContextCompat.getMainExecutor(this)) { imageProxy ->
-                        processImageProxy(imageProxy)
+                    it.setAnalyzer(cameraExecutor) { imageProxy ->
+                        processImageProxyWithInterval(imageProxy)
                     }
                 }
 
-            val cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
+            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
             try {
                 cameraProvider.unbindAll()
@@ -95,10 +111,47 @@ class MainActivity : AppCompatActivity() {
     private fun processImageProxy(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
-            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-            viewModel.processImage(image)
+            try {
+                val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
+
+                // Pass ImageProxy to ViewModel for processing
+                viewModel.processImage(image, imageProxy)
+            } catch (e: Exception) {
+                Log.e("FaceDetection", "Failed to process image: ${e.message}", e)
+                imageProxy.close() // Ensure ImageProxy is closed in case of failure
+            }
+        } else {
+            Log.e("FaceDetection", "MediaImage is null.")
+            imageProxy.close()
         }
-        imageProxy.close()
+    }
+
+    private fun processImageProxyWithInterval(imageProxy: ImageProxy) {
+        val currentTime = System.currentTimeMillis()
+
+        // Process only if one second has passed since the last processing
+        if (currentTime - lastProcessedTime >= 1000) {
+            val mediaImage = imageProxy.image
+            if (mediaImage != null) {
+                try {
+                    val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                    val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
+
+                    // Pass ImageProxy to ViewModel for processing
+                    viewModel.processImage(image, imageProxy)
+                } catch (e: Exception) {
+                    Log.e("FaceDetection", "Failed to process image: ${e.message}", e)
+                    imageProxy.close()
+                }
+            } else {
+                Log.e("FaceDetection", "MediaImage is null.")
+                imageProxy.close()
+            }
+            lastProcessedTime = currentTime // Update last processed time
+        } else {
+            imageProxy.close() // Skip frames if within the interval
+        }
     }
 
     private fun allPermissionsGranted() = arrayOf(permission.CAMERA).all {

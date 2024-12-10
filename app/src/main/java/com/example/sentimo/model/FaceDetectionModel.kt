@@ -1,5 +1,6 @@
 package com.example.sentimo.model
 
+import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
@@ -14,7 +15,7 @@ class FaceDetectionModel {
 
     private val detector = FaceDetection.getClient(options)
 
-    fun detectFaces(image: InputImage, callback: (List<Face>) -> Unit, errorCallback: (Exception) -> Unit) {
+    fun detectFaces(image: InputImage,imageProxy: ImageProxy, callback: (List<Face>) -> Unit, errorCallback: (Exception) -> Unit) {
         detector.process(image)
             .addOnSuccessListener { faces ->
                 callback(faces)
@@ -22,5 +23,13 @@ class FaceDetectionModel {
             .addOnFailureListener { e ->
                 errorCallback(e)
             }
+            .addOnCompleteListener {
+                imageProxy.close()
+            }
+
+    }
+
+    fun close() {
+        detector.close()
     }
 }
