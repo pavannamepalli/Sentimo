@@ -4,12 +4,14 @@ import android.Manifest.permission
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
+import android.util.Size
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -23,17 +25,20 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+
     private lateinit var previewView: PreviewView
+    private lateinit var faceOverlayView: FaceOverlayView
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var viewModel: FaceDetectionViewModel
-    private var lastProcessedTime = 0L
+
+    private var lastProcessedTime: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        FirebaseApp.initializeApp(this)
 
         previewView = findViewById(R.id.previewView)
+        faceOverlayView = findViewById(R.id.faceOverlayView)
         cameraExecutor = Executors.newSingleThreadExecutor()
         viewModel = ViewModelProvider(this)[FaceDetectionViewModel::class.java]
 
@@ -43,21 +48,13 @@ class MainActivity : AppCompatActivity() {
             requestPermissions.launch(arrayOf(permission.CAMERA))
         }
 
-        // Observe ViewModel
         viewModel.faces.observe(this) { faces ->
-            for (face in faces) {
-                val bounds = face.boundingBox
-                val smileProb = face.smilingProbability ?: -1.0
-                Log.d("FaceDetection", "Detected face! Bounds: $bounds, Smile Probability: $smileProb")
-            }
+            faceOverlayView.setFaces(faces)
         }
 
         viewModel.error.observe(this) { error ->
             Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
         }
-
-        // Camera Permissions
-
     }
 
     override fun onDestroy() {
@@ -80,11 +77,14 @@ class MainActivity : AppCompatActivity() {
 
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
-            val preview = androidx.camera.core.Preview.Builder()
+            val preview = Preview.Builder()
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
+
+            // Set the scale type for PreviewView
+            previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
 
             val imageAnalyzer = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -108,29 +108,14 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun processImageProxy(imageProxy: ImageProxy) {
-        val mediaImage = imageProxy.image
-        if (mediaImage != null) {
-            try {
-                val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-                val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
 
-                // Pass ImageProxy to ViewModel for processing
-                viewModel.processImage(image, imageProxy)
-            } catch (e: Exception) {
-                Log.e("FaceDetection", "Failed to process image: ${e.message}", e)
-                imageProxy.close() // Ensure ImageProxy is closed in case of failure
-            }
-        } else {
-            Log.e("FaceDetection", "MediaImage is null.")
-            imageProxy.close()
-        }
+    private fun allPermissionsGranted() = arrayOf(permission.CAMERA).all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun processImageProxyWithInterval(imageProxy: ImageProxy) {
         val currentTime = System.currentTimeMillis()
 
-        // Process only if one second has passed since the last processing
         if (currentTime - lastProcessedTime >= 1000) {
             val mediaImage = imageProxy.image
             if (mediaImage != null) {
@@ -138,7 +123,21 @@ class MainActivity : AppCompatActivity() {
                     val rotationDegrees = imageProxy.imageInfo.rotationDegrees
                     val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
 
-                    // Pass ImageProxy to ViewModel for processing
+                    // Dynamically fetch the image dimensions
+                    val imageWidth = imageProxy.width
+                    val imageHeight = imageProxy.height
+
+                    // Update scale factors
+                    runOnUiThread {
+                        faceOverlayView.setScaleFactors(
+                            imageWidth,
+                            imageHeight,
+                            previewView.width,
+                            previewView.height
+                        )
+                    }
+
+                    // Pass to ViewModel for processing
                     viewModel.processImage(image, imageProxy)
                 } catch (e: Exception) {
                     Log.e("FaceDetection", "Failed to process image: ${e.message}", e)
@@ -148,14 +147,13 @@ class MainActivity : AppCompatActivity() {
                 Log.e("FaceDetection", "MediaImage is null.")
                 imageProxy.close()
             }
-            lastProcessedTime = currentTime // Update last processed time
+            lastProcessedTime = currentTime
         } else {
-            imageProxy.close() // Skip frames if within the interval
+            imageProxy.close()
         }
     }
 
-    private fun allPermissionsGranted() = arrayOf(permission.CAMERA).all {
-        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
-    }
 
 }
+
+
