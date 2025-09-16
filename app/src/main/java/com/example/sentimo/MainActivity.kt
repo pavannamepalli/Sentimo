@@ -1,30 +1,29 @@
 package com.example.sentimo
 
-import android.Manifest.permission
-import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.example.sentimo.camera.CameraManager
+import com.example.sentimo.face.FaceDetectionManager
+import com.example.sentimo.ui.components.EmotionOverlayView
+import com.example.sentimo.ui.viewmodel.MainViewModel
+import com.example.sentimo.utils.PermissionUtils
 import com.google.firebase.FirebaseApp
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.*
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
-    private lateinit var cameraExecutor: ExecutorService
+    private lateinit var emotionOverlayView: EmotionOverlayView
+    private lateinit var cameraManager: CameraManager
+    private lateinit var faceDetectionManager: FaceDetectionManager
+    
+    private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,108 +31,106 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
 
-        previewView = findViewById(R.id.previewView)
-        cameraExecutor = Executors.newSingleThreadExecutor()
+        initializeViews()
+        initializeManagers()
+        setupObservers()
+        checkPermissions()
+    }
 
-        // Check camera permission
-        if (allPermissionsGranted()) {
+    private fun initializeViews() {
+        previewView = findViewById(R.id.previewView)
+        emotionOverlayView = findViewById(R.id.emotionOverlayView)
+    }
+
+    private fun initializeManagers() {
+        cameraManager = CameraManager(this, this)
+        faceDetectionManager = FaceDetectionManager()
+        
+        setupCameraCallbacks()
+        setupFaceDetectionCallbacks()
+    }
+
+    private fun setupCameraCallbacks() {
+        cameraManager.setImageAnalysisCallback { imageProxy ->
+            faceDetectionManager.processImage(imageProxy)
+        }
+    }
+
+    private fun setupFaceDetectionCallbacks() {
+        faceDetectionManager.setEmotionDetectionCallback { emotionData ->
+            viewModel.updateEmotionData(emotionData)
+        }
+    }
+
+    private fun setupObservers() {
+        lifecycleScope.launch {
+            viewModel.emotionData.collect { emotionData ->
+                emotionData?.let {
+                    emotionOverlayView.updateEmotionData(it)
+                }
+            }
+        }
+        
+        lifecycleScope.launch {
+            viewModel.errorMessage.collect { errorMessage ->
+                errorMessage?.let {
+                    Toast.makeText(this@MainActivity, it, Toast.LENGTH_SHORT).show()
+                    viewModel.setError(null)
+                }
+            }
+        }
+    }
+
+    private fun checkPermissions() {
+        if (PermissionUtils.isCameraPermissionGranted(this)) {
             startCamera()
         } else {
-            requestPermissions.launch(arrayOf(permission.CAMERA))
+            requestPermissions.launch(PermissionUtils.CAMERA_PERMISSIONS)
         }
     }
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions[permission.CAMERA] == true) {
+        if (PermissionUtils.isCameraPermissionGranted(this)) {
             startCamera()
         } else {
-            Toast.makeText(this, "Camera permission is required", Toast.LENGTH_SHORT).show()
+            viewModel.setError("Camera permission is required")
         }
     }
 
     private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-
-            val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
-
-            val imageAnalyzer = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor) { imageProxy ->
-                        processImageProxy(imageProxy)
-                    }
-                }
-
-            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalyzer
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Use case binding failed", e)
-            }
-        }, ContextCompat.getMainExecutor(this))
-    }
-
-    private fun processImageProxy(imageProxy: ImageProxy) {
-        val mediaImage = imageProxy.image
-        if (mediaImage != null) {
-            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-            val options = FaceDetectorOptions.Builder()
-                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
-                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
-                .build()
-            val detector = FaceDetection.getClient(options)
-
-            detector.process(image)
-                .addOnSuccessListener { faces ->
-                    handleDetectedFaces(faces)
-                }
-                .addOnFailureListener { e ->
-                    Log.e(TAG, "Face detection failed", e)
-                }
-                .addOnCompleteListener {
-                    imageProxy.close()
-                }
+        try {
+            cameraManager.startCamera(previewView)
+        } catch (e: Exception) {
+            viewModel.setError("Failed to start camera: ${e.message}")
         }
-    }
-
-    private fun handleDetectedFaces(faces: List<Face>) {
-        for (face in faces) {
-            val bounds = face.boundingBox
-            val smileProb = face.smilingProbability ?: -1.0
-            val leftEyeOpenProb = face.leftEyeOpenProbability ?: -1.0
-
-
-            Log.d(TAG, "Face detected! Bounds: $bounds, Smile Probability: $smileProb")
-        }
-    }
-
-    private fun allPermissionsGranted() = arrayOf(permission.CAMERA).all {
-        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        cameraExecutor.shutdown()
+        cleanupResources()
     }
-
-    companion object {
-        private const val TAG = "FaceDetection"
+    
+    private fun cleanupResources() {
+        try {
+            emotionOverlayView.clearData()
+            cameraManager.shutdown()
+            faceDetectionManager.close()
+        } catch (e: Exception) {
+            // Handle cleanup errors silently
+        }
     }
-
-
+    
+    override fun onPause() {
+        super.onPause()
+        cameraManager.stopCamera()
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        if (PermissionUtils.isCameraPermissionGranted(this)) {
+            startCamera()
+        }
+    }
 }
